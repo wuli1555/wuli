@@ -10,10 +10,10 @@ router.get('/', async (req, res) => {
       sql: 'SELECT id, author, tag, text, created_at FROM comments ORDER BY created_at DESC LIMIT 50',
       args: []
     });
-    res.json(result.rows);
+    res.json({ success: true, data: result.rows });
   } catch (err) {
     console.error('[api] 获取留言失败:', err.message);
-    res.status(500).json({ error: '获取留言失败' });
+    res.status(500).json({ success: false, error: '获取留言失败' });
   }
 });
 
@@ -24,7 +24,7 @@ router.post('/', async (req, res) => {
 
     // 基本校验
     if (!text || typeof text !== 'string' || text.trim().length === 0) {
-      return res.status(400).json({ error: '留言内容不能为空' });
+      return res.status(400).json({ success: false, error: '留言内容不能为空' });
     }
 
     const clean = {
@@ -43,10 +43,10 @@ router.post('/', async (req, res) => {
       args: [result.lastInsertRowid]
     });
 
-    res.status(201).json(inserted.rows[0]);
+    res.status(201).json({ success: true, data: inserted.rows[0] });
   } catch (err) {
     console.error('[api] 提交留言失败:', err.message);
-    res.status(500).json({ error: '提交留言失败' });
+    res.status(500).json({ success: false, error: '提交留言失败' });
   }
 });
 
