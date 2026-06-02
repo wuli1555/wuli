@@ -3780,29 +3780,6 @@ ctx.fillRect(0, 0, W, H);
         baselineBeta = null; // 重置基准，下次重新校准
       });
     }
-
-    // ── 触屏滑动倾斜（所有触屏设备通用兜底，包括无陀螺仪的安卓平板）──
-    if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
-      var touchTimeout = null;
-
-      element.addEventListener('touchmove', function(e) {
-        if (e.touches.length === 0) return;
-        var touch = e.touches[0];
-        matrix = getMatrix(touch.clientX, touch.clientY);
-        element.style.transition = 'transform 80ms ease-out';
-        element.style.transform = 'perspective(700px) matrix3d(' + matrix + ')';
-        if (touchTimeout) clearTimeout(touchTimeout);
-      }, { passive: true });
-
-      element.addEventListener('touchend', function() {
-        // 松手后平滑回弹到平面
-        element.style.transition = 'transform 400ms cubic-bezier(0.22, 0.61, 0.36, 1)';
-        element.style.transform = 'perspective(700px) matrix3d(' + identityMatrix + ')';
-        touchTimeout = setTimeout(function() {
-          element.style.transition = '';
-        }, 400);
-      });
-    }
   }
 
   function initDynamicPHTilt() {
@@ -4123,6 +4100,93 @@ window.addEventListener('resize', function() {
 });
 </script>
 
+<script>
+// ── 手机端门户 2D Canvas 粒子背景（轻量、零依赖、保证所有设备可见）──
+(function() {
+  var isMobile = window.innerWidth < 768;
+  var isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+  if (!isMobile && !isTouch) return;
+
+  var container = document.getElementById('webgl-bg');
+  if (!container) return;
+
+  window._portalUse2DCanvas = true;
+
+  var canvas = document.createElement('canvas');
+  canvas.id = 'portal-fallback-2d';
+  canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;z-index:1;';
+  container.appendChild(canvas);
+  var ctx = canvas.getContext('2d');
+
+  var particles = [];
+  var COUNT = isMobile ? 160 : 260;
+  var W, H;
+
+  function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+    initParticles();
+  }
+
+  function initParticles() {
+    particles = [];
+    for (var i = 0; i < COUNT; i++) {
+      var rnd = Math.random();
+      particles.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        r: Math.random() * 1.6 + 0.4,
+        vx: (Math.random() - 0.5) * 0.25,
+        vy: (Math.random() - 0.5) * 0.25,
+        hue: rnd < 0.08 ? 200 + Math.random() * 30 :
+             rnd < 0.18 ? 280 + Math.random() * 20 :
+             15 + Math.random() * 50,
+        alpha: Math.random() * 0.5 + 0.25,
+        twinkleSpeed: Math.random() * 0.018 + 0.004,
+        twinkleOff: Math.random() * Math.PI * 2
+      });
+    }
+  }
+
+  resize();
+  window.addEventListener('resize', resize);
+
+  var frame = 0;
+  function animate() {
+    frame++;
+    ctx.clearRect(0, 0, W, H);
+    for (var i = 0; i < particles.length; i++) {
+      var p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      if (p.x < -20) p.x = W + 20;
+      if (p.x > W + 20) p.x = -20;
+      if (p.y < -20) p.y = H + 20;
+      if (p.y > H + 20) p.y = -20;
+
+      var tw = Math.sin(frame * p.twinkleSpeed + p.twinkleOff) * 0.35 + 0.65;
+      var a = p.alpha * tw;
+
+      // 柔光环
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * 3, 0, Math.PI * 2);
+      ctx.fillStyle = 'hsla(' + p.hue + ', 45%, 50%, ' + (a * 0.06) + ')';
+      ctx.fill();
+
+      // 核心亮点
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = 'hsla(' + p.hue + ', 55%, 68%, ' + a + ')';
+      ctx.fill();
+    }
+    requestAnimationFrame(animate);
+  }
+  animate();
+
+  window._portalFallbackCanvas = canvas;
+})();
+</script>
+
 <script type="importmap">
 {
   "imports": {
@@ -4154,6 +4218,11 @@ if (container) {
 	  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 	  renderer.setSize(window.innerWidth, window.innerHeight);
 	  container.appendChild(renderer.domElement);
+	  // 隐藏 2D fallback — WebGL 跑起来了就用不着它
+	  if (window._portalFallbackCanvas) {
+	    window._portalFallbackCanvas.style.display = 'none';
+	    window._portalUse2DCanvas = false;
+	  }
 	} catch (e) {
 	  console.warn('WebGL context unavailable — portal background skipped:', e.message);
 	  container.style.background = 'radial-gradient(ellipse at center, #0a1628 0%, #03060c 70%)';
