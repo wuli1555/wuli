@@ -4101,263 +4101,178 @@ window.addEventListener('resize', function() {
 </script>
 
 <script>
-// ── 手机端门户 2D Canvas 粒子背景（轻量、零依赖、保证所有设备可见）──
+// ── 门户 WebGL 星云背景（原生 WebGL，零依赖，所有设备可见）──
 (function() {
-  var isMobile = window.innerWidth < 768;
-  var isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
-  if (!isMobile && !isTouch) return;
-
-  var container = document.getElementById('webgl-bg');
+  var container = document.getElementById("webgl-bg");
   if (!container) return;
 
-  window._portalUse2DCanvas = true;
-
-  var canvas = document.createElement('canvas');
-  canvas.id = 'portal-fallback-2d';
-  canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;z-index:1;';
+  var canvas = document.createElement("canvas");
+  canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;z-index:1;";
   container.appendChild(canvas);
-  var ctx = canvas.getContext('2d');
 
-  var particles = [];
-  var COUNT = isMobile ? 160 : 260;
-  var W, H;
+  var gl = canvas.getContext("webgl", { alpha: true, antialias: false })
+        || canvas.getContext("experimental-webgl", { alpha: true, antialias: false });
+  if (!gl) {
+    console.warn("WebGL unavailable");
+    container.style.background = "radial-gradient(ellipse at center, #0a1628 0%, #03060c 70%)";
+    return;
+  }
+
+  function compileShader(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.warn("Shader error:", gl.getShaderInfoLog(s));
+      gl.deleteShader(s); return null;
+    }
+    return s;
+  }
+
+  var vs = compileShader(gl.VERTEX_SHADER,
+    "attribute vec2 a_position;" +
+    "attribute vec2 a_uv;" +
+    "varying vec2 vUv;" +
+    "void main() {" +
+    "  vUv = a_uv;" +
+    "  gl_Position = vec4(a_position, 0.0, 1.0);" +
+    "}"
+  );
+
+  var fsSrc =
+    "#ifdef GL_FRAGMENT_PRECISION_HIGH\n" +
+    "precision highp float;\n" +
+    "#else\n" +
+    "precision mediump float;\n" +
+    "#endif\n" +
+    "varying vec2 vUv;\n" +
+    "uniform float u_time;\n" +
+    "uniform float u_intro;\n" +
+    "uniform vec2 u_resolution;\n" +
+    "uniform float u_gridSpace;\n" +
+    "float hash(vec2 p) {\n" +
+    "  #ifdef GL_FRAGMENT_PRECISION_HIGH\n" +
+    "  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);\n" +
+    "  #else\n" +
+    "  p = fract(p * 0.1031);\n" +
+    "  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);\n" +
+    "  #endif\n" +
+    "}\n" +
+    "vec3 hsl2rgb(float h, float s, float l) {\n" +
+    "  vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);\n" +
+    "  return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));\n" +
+    "}\n" +
+    "void main() {\n" +
+    "  vec2 st = vUv * u_resolution;\n" +
+    "  vec2 uv = vUv - 0.5;\n" +
+    "  float aspect = u_resolution.x / u_resolution.y;\n" +
+    "  float angle = atan(uv.y, uv.x / aspect);\n" +
+    "  float dist = length(uv * vec2(1.0, 1.0 / aspect));\n" +
+    "  float maxDist = length(vec2(0.5, 0.5 / aspect));\n" +
+    "  float nd = dist / maxDist;\n" +
+    "  float spiral = angle + nd * 14.0 + sin(u_time * 0.08) * 0.3;\n" +
+    "  float armA = pow(abs(sin(spiral * 3.0)) * 0.5 + 0.5, 5.0);\n" +
+    "  float armB = pow(abs(sin(spiral * 2.0 + 1.6)) * 0.5 + 0.5, 4.0);\n" +
+    "  float arms = armA * 0.65 + armB * 0.35;\n" +
+    "  float core = exp(-nd * 4.5);\n" +
+    "  float ring1 = exp(-pow((nd - 0.28) * 8.0, 2.0));\n" +
+    "  float ring2 = exp(-pow((nd - 0.50) * 7.0, 2.0));\n" +
+    "  float edge = 1.0 - smoothstep(0.58, 1.0, nd);\n" +
+    "  float density = (core * 0.7 + ring1 * 0.35 + ring2 * 0.22 + 0.35) * arms * edge;\n" +
+    "  float gs = u_gridSpace;\n" +
+    "  vec2 gp = floor(st / gs);\n" +
+    "  vec2 lp = fract(st / gs);\n" +
+    "  float r = hash(gp);\n" +
+    "  vec2 off = vec2(hash(gp + 0.1), hash(gp + 0.2)) * 0.4 + 0.3;\n" +
+    "  float dd = length(lp - off) * 2.0;\n" +
+    "  float dotV = 1.0 - smoothstep(0.40, 0.75, dd);\n" +
+    "  float thresh = 1.0 - density;\n" +
+    "  float vis = smoothstep(thresh - 0.04, thresh + 0.1, r);\n" +
+    "  float tw = sin(u_time * (0.25 + r * 0.9) + r * 6.283) * 0.5 + 0.5;\n" +
+    "  float alpha = dotV * (0.40 + tw * 0.32) * vis;\n" +
+    "  float hue = 0.04 + r * 0.16;\n" +
+    "  if (r > 0.88) hue = 0.56;\n" +
+    "  else if (r > 0.76) hue = 0.74;\n" +
+    "  float sat = 0.35 + r * 0.35;\n" +
+    "  float lit = 0.48 + r * 0.32;\n" +
+    "  vec3 color = hsl2rgb(hue, sat, lit);\n" +
+    "  vec2 ctr = u_resolution / 2.0 / gs;\n" +
+    "  float dc = distance(ctr, gp + off);\n" +
+    "  float md = distance(ctr, vec2(0.0));\n" +
+    "  float id = dc / md * 1.2 + r * 0.3;\n" +
+    "  float intro = smoothstep(id - 0.05, id + 0.2, u_intro);\n" +
+    "  alpha *= intro;\n" +
+    "  gl_FragColor = vec4(color * alpha, alpha);\n" +
+    "}";
+
+  var fs = compileShader(gl.FRAGMENT_SHADER, fsSrc);
+  if (!vs || !fs) {
+    container.style.background = "radial-gradient(ellipse at center, #0a1628 0%, #03060c 70%)";
+    return;
+  }
+
+  var program = gl.createProgram();
+  gl.attachShader(program, vs);
+  gl.attachShader(program, fs);
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    console.warn("Program link error:", gl.getProgramInfoLog(program));
+    container.style.background = "radial-gradient(ellipse at center, #0a1628 0%, #03060c 70%)";
+    return;
+  }
+  gl.useProgram(program);
+
+  var positions = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
+  var uvs = new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]);
+
+  function setupBuffer(name, data, size) {
+    var loc = gl.getAttribLocation(program, name);
+    var buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+  }
+  setupBuffer("a_position", positions, 2);
+  setupBuffer("a_uv", uvs, 2);
+
+  var uTime = gl.getUniformLocation(program, "u_time");
+  var uIntro = gl.getUniformLocation(program, "u_intro");
+  var uRes = gl.getUniformLocation(program, "u_resolution");
+  var uGS = gl.getUniformLocation(program, "u_gridSpace");
+
+  function getGridSpace() {
+    return (window.innerWidth < 768) ? 6.5 : 4.5;
+  }
+
+  var startTime = performance.now();
+  var introVal = 0;
+
+  function render(now) {
+    var elapsed = (now - startTime) * 0.001;
+    if (introVal < 1.5) introVal += 0.016;
+    gl.uniform1f(uTime, elapsed);
+    gl.uniform1f(uIntro, introVal);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    requestAnimationFrame(render);
+  }
+  requestAnimationFrame(render);
 
   function resize() {
-    W = canvas.width = window.innerWidth;
-    H = canvas.height = window.innerHeight;
-    initParticles();
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var dpr = Math.min(window.devicePixelRatio, 2);
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = w + "px";
+    canvas.style.height = h + "px";
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uGS, getGridSpace());
   }
-
-  function initParticles() {
-    particles = [];
-    for (var i = 0; i < COUNT; i++) {
-      var rnd = Math.random();
-      particles.push({
-        x: Math.random() * W,
-        y: Math.random() * H,
-        r: Math.random() * 1.6 + 0.4,
-        vx: (Math.random() - 0.5) * 0.25,
-        vy: (Math.random() - 0.5) * 0.25,
-        hue: rnd < 0.08 ? 200 + Math.random() * 30 :
-             rnd < 0.18 ? 280 + Math.random() * 20 :
-             15 + Math.random() * 50,
-        alpha: Math.random() * 0.5 + 0.25,
-        twinkleSpeed: Math.random() * 0.018 + 0.004,
-        twinkleOff: Math.random() * Math.PI * 2
-      });
-    }
-  }
-
   resize();
-  window.addEventListener('resize', resize);
-
-  var frame = 0;
-  function animate() {
-    frame++;
-    ctx.clearRect(0, 0, W, H);
-    for (var i = 0; i < particles.length; i++) {
-      var p = particles[i];
-      p.x += p.vx;
-      p.y += p.vy;
-      if (p.x < -20) p.x = W + 20;
-      if (p.x > W + 20) p.x = -20;
-      if (p.y < -20) p.y = H + 20;
-      if (p.y > H + 20) p.y = -20;
-
-      var tw = Math.sin(frame * p.twinkleSpeed + p.twinkleOff) * 0.35 + 0.65;
-      var a = p.alpha * tw;
-
-      // 柔光环
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r * 3, 0, Math.PI * 2);
-      ctx.fillStyle = 'hsla(' + p.hue + ', 45%, 50%, ' + (a * 0.06) + ')';
-      ctx.fill();
-
-      // 核心亮点
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fillStyle = 'hsla(' + p.hue + ', 55%, 68%, ' + a + ')';
-      ctx.fill();
-    }
-    requestAnimationFrame(animate);
-  }
-  animate();
-
-  window._portalFallbackCanvas = canvas;
+  window.addEventListener("resize", resize);
 })();
-</script>
-
-<script type="importmap">
-{
-  "imports": {
-    "three": "./three.module.js"
-  }
-}
-</script>
-<script type="module">
-// Three.js WebGL 门户背景 — 加载失败时静默降级，不影响页面功能
-let THREE;
-try {
-  THREE = await import('./three.module.js');
-} catch (e) {
-  // three.module.js 不可用时静默跳过 WebGL 背景
-  console.warn('WebGL portal background unavailable:', e.message);
-}
-
-if (THREE) {
-const container = document.getElementById('webgl-bg');
-if (container) {
-
-	let scene, camera, renderer;
-	try {
-	  scene = new THREE.Scene();
-	  camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
-	  camera.position.z = 1;
-
-	  renderer = new THREE.WebGLRenderer({ alpha: true, antialias: false });
-	  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-	  renderer.setSize(window.innerWidth, window.innerHeight);
-	  container.appendChild(renderer.domElement);
-	  // 隐藏 2D fallback — WebGL 跑起来了就用不着它
-	  if (window._portalFallbackCanvas) {
-	    window._portalFallbackCanvas.style.display = 'none';
-	    window._portalUse2DCanvas = false;
-	  }
-	} catch (e) {
-	  console.warn('WebGL context unavailable — portal background skipped:', e.message);
-	  container.style.background = 'radial-gradient(ellipse at center, #0a1628 0%, #03060c 70%)';
-	}
-	if (renderer) {
-
-let uIntro = { value: 0 };
-const material = new THREE.ShaderMaterial({
-  vertexShader: `
-    varying vec2 vUv;
-    void main() {
-      vUv = uv;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    }
-  `,
-  fragmentShader: `
-    #ifdef GL_FRAGMENT_PRECISION_HIGH
-    precision highp float;
-    #else
-    precision mediump float;
-    #endif
-    varying vec2 vUv;
-    uniform float u_time;
-    uniform float u_intro;
-    uniform vec2 u_resolution;
-    uniform float u_gridSpace;
-
-    float hash(vec2 p) {
-      #ifdef GL_FRAGMENT_PRECISION_HIGH
-      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-      #else
-      // mediump-safe: fold large coords into [0,1] to avoid sin/dot overflow
-      p = fract(p * 0.1031);
-      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-      #endif
-    }
-
-    vec3 hsl2rgb(float h, float s, float l) {
-      vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
-      return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
-    }
-
-    void main() {
-      vec2 st = vUv * u_resolution;
-      vec2 uv = vUv - 0.5;
-      float aspect = u_resolution.x / u_resolution.y;
-
-      float angle = atan(uv.y, uv.x / aspect);
-      float dist = length(uv * vec2(1.0, 1.0 / aspect));
-      float maxDist = length(vec2(0.5, 0.5 / aspect));
-      float nd = dist / maxDist;
-
-      // spiral arms
-      float spiral = angle + nd * 14.0 + sin(u_time * 0.08) * 0.3;
-      float armA = pow(abs(sin(spiral * 3.0)) * 0.5 + 0.5, 5.0);
-      float armB = pow(abs(sin(spiral * 2.0 + 1.6)) * 0.5 + 0.5, 4.0);
-      float arms = armA * 0.65 + armB * 0.35;
-
-      // radial density layers
-      float core = exp(-nd * 4.5);
-      float ring1 = exp(-pow((nd - 0.28) * 8.0, 2.0));
-      float ring2 = exp(-pow((nd - 0.50) * 7.0, 2.0));
-      float edge = 1.0 - smoothstep(0.58, 1.0, nd);
-      float density = (core * 0.7 + ring1 * 0.35 + ring2 * 0.22 + 0.35) * arms * edge;
-
-      // grid dot
-      float gs = u_gridSpace;
-      vec2 gp = floor(st / gs);
-      vec2 lp = fract(st / gs);
-      float r = hash(gp);
-      vec2 off = vec2(hash(gp + 0.1), hash(gp + 0.2)) * 0.4 + 0.3;
-      float dd = length(lp - off) * 2.0;
-      float dotV = 1.0 - smoothstep(0.40, 0.75, dd);
-
-      float thresh = 1.0 - density;
-      float vis = smoothstep(thresh - 0.04, thresh + 0.1, r);
-
-      float tw = sin(u_time * (0.25 + r * 0.9) + r * 6.283) * 0.5 + 0.5;
-      float alpha = dotV * (0.40 + tw * 0.32) * vis;
-
-      // warm nebula palette — dominant warm orange + blue / purple accents
-      float hue = 0.04 + r * 0.16;
-      if (r > 0.88) hue = 0.56;        // blue (~10%)
-      else if (r > 0.76) hue = 0.74;   // purple (~12%)
-      float sat = 0.35 + r * 0.35;
-      float lit = 0.48 + r * 0.32;
-      vec3 color = hsl2rgb(hue, sat, lit);
-
-      // intro
-      vec2 ctr = u_resolution / 2.0 / gs;
-      float dc = distance(ctr, gp + off);
-      float md = distance(ctr, vec2(0.0));
-      float id = dc / md * 1.2 + r * 0.3;
-      float intro = smoothstep(id - 0.05, id + 0.2, u_intro);
-      alpha *= intro;
-
-      gl_FragColor = vec4(color * alpha, alpha);
-    }
-  `,
-  uniforms: {
-    u_time: { value: 0 },
-    u_intro: uIntro,
-    u_resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
-    u_gridSpace: { value: (window.innerWidth < 768) ? 6.5 : 4.5 }
-  },
-  transparent: true,
-  depthWrite: false,
-  blending: THREE.AdditiveBlending
-});
-
-const geometry = new THREE.PlaneGeometry(2, 2);
-const mesh = new THREE.Mesh(geometry, material);
-scene.add(mesh);
-
-const clock = new THREE.Clock();
-function animate() {
-  requestAnimationFrame(animate);
-  material.uniforms.u_time.value = clock.getElapsedTime();
-  // intro animation: u_intro grows over first 2 seconds
-  if (uIntro.value < 1.5) {
-    uIntro.value += 0.016;
-  }
-  renderer.render(scene, camera);
-}
-animate();
-
-window.addEventListener('resize', () => {
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  material.uniforms.u_resolution.value.set(window.innerWidth, window.innerHeight);
-  material.uniforms.u_gridSpace.value = (window.innerWidth < 768) ? 6.5 : 4.5;
-});
-
-} // end if (renderer)
-} // end if (container)
-} // end if (THREE)
 </script>
 
 <script>
