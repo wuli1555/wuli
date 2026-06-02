@@ -3780,6 +3780,29 @@ ctx.fillRect(0, 0, W, H);
         baselineBeta = null; // 重置基准，下次重新校准
       });
     }
+
+    // ── 触屏滑动倾斜（所有触屏设备通用兜底，包括无陀螺仪的安卓平板）──
+    if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
+      var touchTimeout = null;
+
+      element.addEventListener('touchmove', function(e) {
+        if (e.touches.length === 0) return;
+        var touch = e.touches[0];
+        matrix = getMatrix(touch.clientX, touch.clientY);
+        element.style.transition = 'transform 80ms ease-out';
+        element.style.transform = 'perspective(700px) matrix3d(' + matrix + ')';
+        if (touchTimeout) clearTimeout(touchTimeout);
+      }, { passive: true });
+
+      element.addEventListener('touchend', function() {
+        // 松手后平滑回弹到平面
+        element.style.transition = 'transform 400ms cubic-bezier(0.22, 0.61, 0.36, 1)';
+        element.style.transform = 'perspective(700px) matrix3d(' + identityMatrix + ')';
+        touchTimeout = setTimeout(function() {
+          element.style.transition = '';
+        }, 400);
+      });
+    }
   }
 
   function initDynamicPHTilt() {
