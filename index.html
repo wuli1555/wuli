@@ -3712,6 +3712,74 @@ ctx.fillRect(0, 0, W, H);
         element.style.transform = `perspective(700px) matrix3d(${matrix})`;
       }, 200);
     });
+
+    // ── 手机端陀螺仪物理倾斜 ──
+    if (window.DeviceOrientationEvent && ('ontouchstart' in window || navigator.maxTouchPoints > 0)) {
+      let gyroActive = false;
+      let baselineBeta = null, baselineGamma = null;
+      let rafId = null;
+
+      const applyGyroMatrix = (gamma, beta) => {
+        const { left, top, width, height } = getDimensions();
+        const centerX = left + width / 2;
+        const centerY = top + height / 2;
+        // 映射陀螺仪角度到卡片相对位置（范围 ±30% 卡片宽高）
+        const maxDX = width * 0.3;
+        const maxDY = height * 0.3;
+        const virtualX = centerX + Math.max(-1, Math.min(1, gamma / 30)) * maxDX;
+        const virtualY = centerY + Math.max(-1, Math.min(1, beta / 30)) * maxDY;
+
+        matrix = getMatrix(virtualX, virtualY);
+        element.style.transition = "transform 150ms ease-out";
+        element.style.transform = 'perspective(700px) matrix3d(' + matrix + ')';
+      };
+
+      const handleOrientation = function(e) {
+        if (e.gamma === null || e.beta === null) return;
+        // 首次读数设为基准线（用户手持手机的自然角度）
+        if (baselineBeta === null) {
+          baselineBeta = e.beta;
+          baselineGamma = e.gamma;
+          return;
+        }
+        var dGamma = e.gamma - baselineGamma;
+        var dBeta = e.beta - baselineBeta;
+        if (!rafId) {
+          rafId = requestAnimationFrame(function() {
+            applyGyroMatrix(dGamma, dBeta);
+            rafId = null;
+          });
+        }
+      };
+
+      // iOS 13+ 需要请求权限
+      if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+        // 首次 touch 时请求权限（不阻塞，用户自然地触摸卡片时触发）
+        var requestGyro = function() {
+          DeviceOrientationEvent.requestPermission()
+            .then(function(state) {
+              if (state === 'granted') {
+                gyroActive = true;
+                window.addEventListener('deviceorientation', handleOrientation);
+              }
+            })
+            .catch(function() {});
+          element.removeEventListener('touchstart', requestGyro);
+          element.removeEventListener('click', requestGyro);
+        };
+        element.addEventListener('touchstart', requestGyro);
+        element.addEventListener('click', requestGyro);
+      } else {
+        // Android / 其他直接可用
+        gyroActive = true;
+        window.addEventListener('deviceorientation', handleOrientation);
+      }
+
+      // 鼠标操作时暂停陀螺仪，避免冲突
+      element.addEventListener('mouseenter', function() {
+        baselineBeta = null; // 重置基准，下次重新校准
+      });
+    }
   }
 
   function initDynamicPHTilt() {
@@ -4088,6 +4156,7 @@ const material = new THREE.ShaderMaterial({
     uniform float u_time;
     uniform float u_intro;
     uniform vec2 u_resolution;
+    uniform float u_gridSpace;
 
     float hash(vec2 p) {
       #ifdef GL_FRAGMENT_PRECISION_HIGH
@@ -4128,7 +4197,7 @@ const material = new THREE.ShaderMaterial({
       float density = (core * 0.7 + ring1 * 0.35 + ring2 * 0.22 + 0.35) * arms * edge;
 
       // grid dot
-      float gs = 4.5;
+      float gs = u_gridSpace;
       vec2 gp = floor(st / gs);
       vec2 lp = fract(st / gs);
       float r = hash(gp);
@@ -4164,7 +4233,8 @@ const material = new THREE.ShaderMaterial({
   uniforms: {
     u_time: { value: 0 },
     u_intro: uIntro,
-    u_resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) }
+    u_resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
+    u_gridSpace: { value: (window.innerWidth < 768) ? 6.5 : 4.5 }
   },
   transparent: true,
   depthWrite: false,
@@ -4190,6 +4260,7 @@ animate();
 window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
   material.uniforms.u_resolution.value.set(window.innerWidth, window.innerHeight);
+  material.uniforms.u_gridSpace.value = (window.innerWidth < 768) ? 6.5 : 4.5;
 });
 
 } // end if (renderer)
